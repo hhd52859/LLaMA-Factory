@@ -23,9 +23,11 @@ from __future__ import annotations
 
 import argparse
 import json
+
 import math
 import os
 import random
+
 from pathlib import Path
 from typing import Iterable, Iterator, List, MutableMapping, Sequence
 
@@ -137,6 +139,7 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         help="Directory that stores the thermal image files referenced by the annotations.",
     )
+
     output_group = parser.add_mutually_exclusive_group(required=True)
     output_group.add_argument(
         "--output",
@@ -164,6 +167,7 @@ def parse_args() -> argparse.Namespace:
         default=42,
         help="Random seed used to shuffle the dataset before splitting.",
     )
+
     return parser.parse_args()
 
 
@@ -210,6 +214,7 @@ def main() -> None:
     dump_jsonl(train_examples, base_dir / f"train{suffix}")
     dump_jsonl(val_examples, base_dir / f"validation{suffix}")
     dump_jsonl(test_examples, base_dir / f"test{suffix}")
+
 
 
 if __name__ == "__main__":
