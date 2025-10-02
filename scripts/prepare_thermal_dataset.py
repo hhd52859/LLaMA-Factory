@@ -12,16 +12,22 @@ example provided by the user.  Every record is expected to look like::
     }
 
 The script extracts (prompt, response) pairs from the conversation list and
-emits a JSONL file compatible with :mod:`scripts.train_vlm`, i.e. it contains
-``image``, ``instruction`` and ``output`` columns.  The ``image`` column stores
-paths resolved relative to ``--data_root``.
+emits three JSONL files compatible with :mod:`scripts.train_vlm`.  Each record
+contains ``image``, ``instruction`` and ``output`` columns, with ``image``
+storing paths resolved relative to ``--data_root``.  By default the converted
+examples are randomly shuffled and split into ``train.jsonl``, ``validation.jsonl``
+and ``test.jsonl`` according to an 80/10/10 ratio.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+
+import math
 import os
+import random
+
 from pathlib import Path
 from typing import Iterable, Iterator, List, MutableMapping, Sequence
 
@@ -127,13 +133,41 @@ def dump_jsonl(records: Iterable[MutableMapping[str, object]], path: Path) -> No
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--input", required=True, type=Path, help="Path to the raw JSON/JSONL annotations.")
-    parser.add_argument("--output", required=True, type=Path, help="Destination JSONL file.")
     parser.add_argument(
         "--data_root",
         required=True,
         type=Path,
         help="Directory that stores the thermal image files referenced by the annotations.",
     )
+
+    output_group = parser.add_mutually_exclusive_group(required=True)
+    output_group.add_argument(
+        "--output",
+        dest="output",
+        type=Path,
+        help="Base directory or file path prefix for the exported JSONL splits.",
+    )
+    output_group.add_argument(
+        "--output_dir",
+        dest="output",
+        type=Path,
+        help="Alias for --output maintained for backward compatibility.",
+    )
+    parser.add_argument(
+        "--split",
+        nargs=3,
+        type=float,
+        metavar=("TRAIN_RATIO", "VAL_RATIO", "TEST_RATIO"),
+        default=(0.8, 0.1, 0.1),
+        help="Ratios for splitting the dataset into train/validation/test subsets.",
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=42,
+        help="Random seed used to shuffle the dataset before splitting.",
+    )
+
     return parser.parse_args()
 
 
@@ -141,7 +175,46 @@ def main() -> None:
     args = parse_args()
     records = _load_records(args.input)
     examples = convert_dataset(records, args.data_root)
-    dump_jsonl(examples, args.output)
+
+    if not examples:
+        raise ValueError("No valid conversations found in the input annotations.")
+
+    train_ratio, val_ratio, test_ratio = args.split
+    if any(ratio < 0 for ratio in (train_ratio, val_ratio, test_ratio)):
+        raise ValueError("Split ratios must be non-negative.")
+
+    total_ratio = train_ratio + val_ratio + test_ratio
+    if not math.isclose(total_ratio, 1.0, rel_tol=1e-6):
+        raise ValueError("Split ratios must sum to 1.0.")
+
+    rng = random.Random(args.seed)
+    rng.shuffle(examples)
+
+    total = len(examples)
+    train_count = math.floor(total * train_ratio)
+    val_count = math.floor(total * val_ratio)
+    test_count = total - train_count - val_count
+
+    train_examples = examples[:train_count]
+    val_examples = examples[train_count : train_count + val_count]
+    test_examples = examples[train_count + val_count :]
+
+    output_dir = args.output
+    if output_dir.suffix:
+        # The user provided a concrete file path such as ``train.jsonl``.  We ignore the
+        # specific stem and reuse the suffix for train/validation/test files placed in
+        # the same parent directory to satisfy the "three-way split" requirement while
+        # remaining compatible with existing invocation examples.
+        suffix = output_dir.suffix
+        base_dir = output_dir.parent
+    else:
+        suffix = ".jsonl"
+        base_dir = output_dir
+
+    dump_jsonl(train_examples, base_dir / f"train{suffix}")
+    dump_jsonl(val_examples, base_dir / f"validation{suffix}")
+    dump_jsonl(test_examples, base_dir / f"test{suffix}")
+
 
 
 if __name__ == "__main__":
